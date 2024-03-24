@@ -21,7 +21,13 @@ uint32_t load_elf(PD *pgdir, const char *name) {
     if (ph.p_type == PT_LOAD) {
       // Lab1-2: Load segment to physical memory
       // Lab1-4: Load segment to virtual memory
-      TODO();
+      // Copy the segment data from the file to memory
+      iread(inode, ph.p_offset, (void*)ph.p_vaddr, ph.p_filesz);
+
+      // Zero out any remaining bytes if the memory size is larger than the file size
+      if (ph.p_memsz > ph.p_filesz) {
+        memset((void*)(ph.p_vaddr + ph.p_filesz), 0, ph.p_memsz - ph.p_filesz);
+      }
     }
   }
   // TODO: Lab1-4 alloc stack memory in pgdir
