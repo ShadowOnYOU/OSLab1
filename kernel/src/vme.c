@@ -4,6 +4,13 @@
 
 static TSS32 tss;
 
+typedef union free_page {
+  union free_page *next;
+  char buf[PGSIZE];
+} page_t;
+
+static page_t *free_page_list = NULL;
+
 void init_gdt() {
   static SegDesc gdt[NR_SEG];
   gdt[SEG_KCODE] = SEG32(STA_X | STA_R,   0,     0xffffffff, DPL_KERN);
@@ -31,34 +38,112 @@ void init_page() {
   static_assert(sizeof(PT) == PGSIZE, "PT must be one page");
   static_assert(sizeof(PD) == PGSIZE, "PD must be one page");
   // Lab1-4: init kpd and kpt, identity mapping of [0 (or 4096), PHY_MEM)
-  TODO();
+  // TODO change here 3.11
+  for(int i = 0;i < PHY_MEM / PT_SIZE;i++){
+    kpd.pde[i].val = MAKE_PDE((uint32_t)&kpt[i], PTE_P | PTE_W);
+    for(int j = 0;j < NR_PTE;j++){
+      uint32_t virtual_addr = (i << DIR_SHIFT) | (j << TBL_SHIFT);
+      kpt[i].pte[j].val = MAKE_PTE(virtual_addr, PTE_P | PTE_W);
+    }
+  }
   kpt[0].pte[0].val = 0;
   set_cr3(&kpd);
   set_cr0(get_cr0() | CR0_PG);
   // Lab1-4: init free memory at [KER_MEM, PHY_MEM), a heap for kernel
-  TODO();
+  // 计算空闲页的数量
+  // 分配并初始化空闲页的数据结构
+  free_page_list = (page_t *)KER_MEM;
+  for (int i = 1; i < (PHY_MEM - KER_MEM) / PGSIZE; i++)
+  {
+    free_page_list->next = (page_t *)PAGE_DOWN(KER_MEM + PGSIZE * i);
+    free_page_list = free_page_list->next;
+  }
+  free_page_list->next = NULL;
+  free_page_list = (page_t *)KER_MEM;
+  // printf("this is a ckeck");
 }
 
 void *kalloc() {
   // Lab1-4: alloc a page from kernel heap, abort when heap empty
-  TODO();
+  if(free_page_list == NULL){
+    assert(0);
+  }
+  page_t *temp = free_page_list;
+  free_page_list = free_page_list->next;
+  return temp;
 }
 
 void kfree(void *ptr) {
   // Lab1-4: free a page to kernel heap
   // you can just do nothing :)
-  //TODO();
+  page_t *temp = (page_t *)ptr;
+  temp->next = free_page_list;
+  free_page_list = temp;
 }
 
 PD *vm_alloc() {
   // Lab1-4: alloc a new pgdir, map memory under PHY_MEM identityly
-  TODO();
+  // 分配一页作为用户页目录
+  PD *upd = (PD *)kalloc();
+
+  // 将 [0, PHY_MEM) 进行恒等映射
+  for (int i = 0; i < PHY_MEM / PT_SIZE;i++) {
+    // 将前32个PDE映射到内核页表
+    if (i < 32) {
+      upd->pde[i].val = MAKE_PDE(&kpt[i], PTE_P);
+      continue;
+    }
+    upd->pde[i].val = 0;
+  }
+  return upd;
 }
 
 void vm_teardown(PD *pgdir) {
   // Lab1-4: free all pages mapping above PHY_MEM in pgdir, then free itself
   // you can just do nothing :)
-  //TODO();
+    // 遍历页目录
+  /*
+  for (size_t pd_entry = 0; pd_entry < NR_PDE; pd_entry++) {
+    // 跳过前32个页表
+    if (pd_entry < 32) {
+      continue;
+    }
+    // 获取页表项
+    PDE *pde = &pgdir->pde[pd_entry];
+    // 检查页表项是否存在
+    if (pde->present) {
+      PT *pt = (PT *)(pde->page_frame * PGSIZE);
+      // 遍历页表
+      for (size_t pt_entry = 0; pt_entry < NR_PTE; pt_entry++) {
+        // 获取页表项
+        PTE *pte = &pt->pte[pt_entry];
+        // 检查页表项是否存在
+        if (pte->present) {
+          // 跳过映射到 [0, PHY_MEM) 的物理页
+          if (pte->page_frame < PHY_MEM / PGSIZE) {
+            continue;
+          }
+          // 释放物理页面
+          page_t *page = (page_t *)(pte->page_frame * PGSIZE);
+          page->next = free_page_list;
+          free_page_list = page;
+          // 清除页表项
+          pte->val = 0;
+        }
+      }
+      // 释放页表
+      page_t *pt_page = (page_t *)((uintptr_t)pt & PGMASK);
+      pt_page->next = free_page_list;
+      free_page_list = pt_page;
+      // 清除页目录项
+      pde->val = 0;
+    }
+  }
+  // 释放页目录
+  page_t *pd_page = (page_t *)((uintptr_t)pgdir & PGMASK);
+  pd_page->next = free_page_list;
+  free_page_list = pd_page;
+  */
 }
 
 PD *vm_curr() {
@@ -71,14 +156,46 @@ PTE *vm_walkpte(PD *pgdir, size_t va, int prot) {
   // if not exist (PDE of va is empty) and !(prot&1), return NULL
   // remember to let pde's prot |= prot, but not pte
   assert((prot & ~7) == 0);
-  TODO();
+  int pd_index = ADDR2DIR(va);
+  PDE *pde = &(pgdir->pde[pd_index]);
+  // 检查PDE的有效位
+  if (!pde->present) {
+    // 如果PDE不存在
+    if (prot == 0) {
+      // prot为0，直接返回NULL
+      return NULL;
+    } else {
+      // 分配一页作为页表，并清零
+      PT *pt = (PT *)kalloc();
+      memset(pt, 0, PGSIZE);
+      // 设置PDE的权限和页表地址
+      pde->val = MAKE_PDE(pt, prot);
+      // 返回指向对应PTE的指针
+      return &(pt->pte[ADDR2TBL(va)]);
+    }
+  } else {
+    // PDE存在，找到对应的页表项
+    pde->val = pde->val | prot;
+    PT *pt = PDE2PT(*pde);
+    return &(pt->pte[ADDR2TBL(va)]);
+  }
 }
 
 void *vm_walk(PD *pgdir, size_t va, int prot) {
   // Lab1-4: translate va to pa
   // if prot&1 and prot voilation ((pte->val & prot & 7) != prot), call vm_pgfault
   // if va is not mapped and !(prot&1), return NULL
-  TODO();
+  PTE *pte = vm_walkpte(pgdir, va, prot);
+  if (pte == NULL) {
+    if (!(prot & 1)) {
+      return NULL;
+    }
+    // Call vm_pgfault if prot violation
+    pte = vm_walkpte(pgdir, va, prot);
+  }
+  void *page = PTE2PG(*pte);
+  void *pa = (void *)((uintptr_t)page | ADDR2OFF(va));
+  return pa;
 }
 
 void vm_map(PD *pgdir, size_t va, size_t len, int prot) {
@@ -90,7 +207,12 @@ void vm_map(PD *pgdir, size_t va, size_t len, int prot) {
   size_t end = PAGE_UP(va + len);
   assert(start >= PHY_MEM);
   assert(end >= start);
-  TODO();
+  // TODO();
+  for (size_t addr = start; addr < end; addr += PGSIZE) {
+    PT *pt = (PT *)kalloc();
+    PTE *pte = vm_walkpte(pgdir, addr, prot);
+    pte->val = MAKE_PTE(pt, prot);
+  }
 }
 
 void vm_unmap(PD *pgdir, size_t va, size_t len) {

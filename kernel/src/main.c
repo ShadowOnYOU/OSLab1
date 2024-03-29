@@ -14,9 +14,9 @@ int main() {
   init_gdt();
   init_serial();
   init_fs();
-  //init_page(); // uncomment me at Lab1-4
-  //init_cte(); // uncomment me at Lab1-5
-  //init_timer(); // uncomment me at Lab1-7
+  init_page(); // uncomment me at Lab1-4
+  init_cte(); // uncomment me at Lab1-5
+  init_timer(); // uncomment me at Lab1-7
   //init_proc(); // uncomment me at Lab2-1
   //init_dev(); // uncomment me at Lab3-1
   printf("Hello from OS!\n");
@@ -31,7 +31,12 @@ void init_user_and_go() {
   // Lab1-8: argv
   // Lab2-1: proc
   // Lab3-2: add cwd
-  uint32_t eip = load_elf(NULL, "loaduser");
-  assert(eip != -1);
-  ((void(*)())eip)();
+  PD *pgdir = vm_alloc();
+  Context ctx;
+  // char *argv[] = {"sh1", NULL}; // Example argument list
+  char *argv[] = {NULL};
+  assert(load_user(pgdir, &ctx, "sh1", argv) == 0);
+  set_cr3(pgdir);
+  set_tss(KSEL(SEG_KDATA), (uint32_t)kalloc() + PGSIZE);
+  irq_iret(&ctx);
 }
