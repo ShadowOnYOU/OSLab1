@@ -41,7 +41,8 @@ int sys_read(int fd, void *buf, size_t count) {
 
 int sys_brk(void *addr) {
   // TODO: Lab1-5
-  static size_t brk = 0; // use brk of proc instead of this in Lab2-1
+  // static size_t brk = 0; // use brk of proc instead of this in Lab2-1
+  size_t brk = proc_curr()->brk;
   size_t new_brk = PAGE_UP(addr);
   if (brk == 0) {
     brk = new_brk;
@@ -59,9 +60,8 @@ void sys_sleep(int ticks) {
     uint64_t end = start + ticks;
 
     while (get_tick() < end) {
-        sti();
-        hlt();
-        cli();
+      // sti();hlt();cli();
+      proc_yield(); // change to me in Lab2-1
     }
 }
 
@@ -82,7 +82,8 @@ int sys_exec(const char *path, char *const argv[]) {
 }
 
 int sys_getpid() {
-  TODO(); // Lab2-1
+  // TODO(); // Lab2-1
+  return proc_curr()->pid;
 }
 
 void sys_yield() {
@@ -90,31 +91,89 @@ void sys_yield() {
 }
 
 int sys_fork() {
-  TODO(); // Lab2-2
+  // TODO(); // Lab2-2
+  proc_t *newpr = proc_alloc();
+  if(newpr == NULL){
+    return -1;
+  }
+  proc_copycurr(newpr);
+  proc_addready(newpr);
+  return newpr->pid;
 }
 
 void sys_exit(int status) {
-  TODO(); // Lab2-3
+  // TODO(); // Lab2-3
+  proc_makezombie(proc_curr(), status);
+  INT(0x81);
+  assert(0);
 }
 
 int sys_wait(int *status) {
-  TODO(); // Lab2-3, Lab2-4
+  // TODO(); // Lab2-3, Lab2-4
+  if(proc_curr()->child_num == 0){
+    return -1;
+  }
+  /*
+  while (proc_findzombie(proc_curr()) == NULL)
+  {
+    proc_yield();
+  }
+  */
+  sem_p(&(proc_curr()->zombie_sem));
+  // 此处存疑
+  if(status != NULL){
+    *status = proc_findzombie(proc_curr())->exit_code;
+  }
+  int pid = proc_findzombie(proc_curr())->pid;
+  proc_free(proc_findzombie(proc_curr()));
+  proc_curr()->child_num--;
+  return pid;
 }
 
 int sys_sem_open(int value) {
-  TODO(); // Lab2-5
+  // TODO(); // Lab2-5
+  int pos = proc_allocusem(proc_curr());
+  if(pos == -1){
+    return -1;
+  }
+  usem_t * ut = usem_alloc(value);
+  if(ut == NULL){
+    return -1;
+  }
+  proc_curr()->usems[pos] = ut;
+  return pos;
 }
 
 int sys_sem_p(int sem_id) {
-  TODO(); // Lab2-5
+  // TODO(); // Lab2-5
+  usem_t * ut = proc_getusem(proc_curr(), sem_id);
+  if(ut == NULL){
+    return -1;
+  }
+  sem_p(&(ut->sem));
+  return 0;
 }
 
 int sys_sem_v(int sem_id) {
-  TODO(); // Lab2-5
+  // TODO(); // Lab2-5
+  usem_t * ut = proc_getusem(proc_curr(), sem_id);
+  if(ut == NULL){
+    return -1;
+  }
+  sem_v(&(ut->sem));
+  return 0;
 }
 
 int sys_sem_close(int sem_id) {
-  TODO(); // Lab2-5
+  // TODO(); // Lab2-5
+  usem_t * ut = proc_getusem(proc_curr(), sem_id);
+  if(ut == NULL){
+    return -1;
+  }
+  // printf("似在这里的173");
+  usem_close(ut);
+  proc_curr()->usems[sem_id] = NULL;
+  return 0;
 }
 
 int sys_open(const char *path, int mode) {

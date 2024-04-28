@@ -70,6 +70,8 @@ void *kalloc() {
   }
   page_t *temp = free_page_list;
   free_page_list = free_page_list->next;
+  // 不是哥们，这边还能错？？？
+  memset(temp, 0, PGSIZE);
   return temp;
 }
 
@@ -99,51 +101,6 @@ PD *vm_alloc() {
 }
 
 void vm_teardown(PD *pgdir) {
-  // Lab1-4: free all pages mapping above PHY_MEM in pgdir, then free itself
-  // you can just do nothing :)
-    // 遍历页目录
-  /*
-  for (size_t pd_entry = 0; pd_entry < NR_PDE; pd_entry++) {
-    // 跳过前32个页表
-    if (pd_entry < 32) {
-      continue;
-    }
-    // 获取页表项
-    PDE *pde = &pgdir->pde[pd_entry];
-    // 检查页表项是否存在
-    if (pde->present) {
-      PT *pt = (PT *)(pde->page_frame * PGSIZE);
-      // 遍历页表
-      for (size_t pt_entry = 0; pt_entry < NR_PTE; pt_entry++) {
-        // 获取页表项
-        PTE *pte = &pt->pte[pt_entry];
-        // 检查页表项是否存在
-        if (pte->present) {
-          // 跳过映射到 [0, PHY_MEM) 的物理页
-          if (pte->page_frame < PHY_MEM / PGSIZE) {
-            continue;
-          }
-          // 释放物理页面
-          page_t *page = (page_t *)(pte->page_frame * PGSIZE);
-          page->next = free_page_list;
-          free_page_list = page;
-          // 清除页表项
-          pte->val = 0;
-        }
-      }
-      // 释放页表
-      page_t *pt_page = (page_t *)((uintptr_t)pt & PGMASK);
-      pt_page->next = free_page_list;
-      free_page_list = pt_page;
-      // 清除页目录项
-      pde->val = 0;
-    }
-  }
-  // 释放页目录
-  page_t *pd_page = (page_t *)((uintptr_t)pgdir & PGMASK);
-  pd_page->next = free_page_list;
-  free_page_list = pd_page;
-  */
 }
 
 PD *vm_curr() {
@@ -225,7 +182,21 @@ void vm_unmap(PD *pgdir, size_t va, size_t len) {
 
 void vm_copycurr(PD *pgdir) {
   // Lab2-2: copy memory mapped in curr pd to pgdir
-  TODO();
+  // TODO();
+  uintptr_t start_va = PHY_MEM;
+  uintptr_t end_va = USR_MEM;
+    for (size_t va = start_va; va < end_va; va += PGSIZE) {
+        PTE *pte = vm_walkpte(vm_curr(), va, 0);
+        if (pte != NULL && pte->present) {
+            // Page is mapped in current page directory, copy it to pgdir
+            int perm =( pte->val )& (0x7);
+            // Map the virtual page in pgdir
+            vm_map(pgdir, (size_t)va, PGSIZE, perm);
+            // Copy the contents of the original virtual page to the new physical page
+            void *pa = vm_walk(pgdir,(size_t)va,perm);
+            memcpy(pa, (void*)va, PGSIZE);
+        }
+    }
 }
 
 void vm_pgfault(size_t va, int errcode) {
